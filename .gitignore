@@ -1,0 +1,5 @@
+node_modules/
+launcher/dsh-web.log
+*.tsbuildinfo
+.DS_Store
+assets/dsh-whale-256.png
