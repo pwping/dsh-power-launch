@@ -103,9 +103,12 @@ function Split-SemVer([string]$v) {
     return $null
 }
 
-# 返回 >0 表示 $newerArg 比 $olderArg 新。核心号优先，正式版 > 预发布版。
-function Compare-SemVer([string]$a, [string]$b) {
-    $A = Split-SemVer $a; $B = Split-SemVer $b
+# 返回 >0 表示 $newer 比 $older 新。核心号优先，正式版 > 预发布版。
+# 参数名不要用 $a/$b：PowerShell 变量名大小写不敏感，会与函数体内的局部
+# $A/$B 撞成同一个变量，而 [string] 约束会把 Split-SemVer 返回的对象强转成
+# 字符串，三个核心号的比较就全部退化成相等、恒返回 0（误判"已是最新"）。
+function Compare-SemVer([string]$newer, [string]$older) {
+    $A = Split-SemVer $newer; $B = Split-SemVer $older
     if (-not $A -or -not $B) { return 0 }
     foreach ($n in 'Major', 'Minor', 'Patch') {
         if ($A.$n -ne $B.$n) { return $A.$n - $B.$n }
@@ -164,6 +167,9 @@ Write-Host ""
 $logFile = Join-Path $PSScriptRoot 'dsh-web.log'
 $runBat  = Join-Path $PSScriptRoot 'dsh-web-run.bat'
 if (-not (Test-Path $runBat)) { Write-Err "缺少 $runBat"; exit 1 }
+# 记下启动前的日志行数：dsh 0.2+ 的 Web UI 地址带一次性 token（每次启动都变），
+# 只能从本次启动写进日志的那行 "dsh web: http://..." 里取，旧 token 会失效。
+$logLinesBefore = if (Test-Path $logFile) { @(Get-Content $logFile -Encoding UTF8 -ErrorAction SilentlyContinue).Count } else { 0 }
 try {
     $ws = New-Object -ComObject WScript.Shell
     # Run(command, windowStyle=0 隐藏, waitOnReturn=$false 不阻塞)
@@ -180,7 +186,14 @@ for ($i = 0; $i -lt 120; $i++) {
     if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) { $ready = $true; break }
 }
 if ($ready) {
+    # 从本次启动写进日志的那行取 dsh 打印的地址（含 token）；取不到就退回裸地址。
     $url = "http://127.0.0.1:$Port"
+    for ($i = 0; $i -lt 10; $i++) {
+        $fresh = @(Get-Content $logFile -Encoding UTF8 -ErrorAction SilentlyContinue | Select-Object -Skip $logLinesBefore)
+        $hit = $fresh | Select-String -Pattern 'dsh web:\s*(https?://\S+)' | Select-Object -Last 1
+        if ($hit) { $url = $hit.Matches[0].Groups[1].Value.Trim(); break }
+        Start-Sleep -Milliseconds 500
+    }
     Write-Ok "Web UI 就绪: $url  (v$finalVer)"
     Write-Info "正在打开默认浏览器 ..."
     Start-Process $url
